@@ -3,6 +3,7 @@ package galah
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,10 +13,11 @@ import (
 	"github.com/0x4d31/galah/internal/cache"
 	"github.com/0x4d31/galah/internal/config"
 	el "github.com/0x4d31/galah/internal/logger"
+	"github.com/0x4d31/galah/internal/renderer"
 	"github.com/0x4d31/galah/pkg/enrich"
 	"github.com/0x4d31/galah/pkg/llm"
-	cblog "github.com/charmbracelet/log"
 	"github.com/0x4d31/galah/pkg/suricata"
+	cblog "github.com/charmbracelet/log"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -65,6 +67,7 @@ type Service struct {
 	LLMConfig     llm.Config
 	Logger        *cblog.Logger
 	Model         llms.Model
+	Renderer      *renderer.Renderer
 }
 
 // NewService loads configuration and initializes the components required for response generation.
@@ -141,6 +144,10 @@ func NewServiceFromConfig(ctx context.Context, cfg *config.Config, rules []confi
 }
 
 func createService(ctx context.Context, cfg *config.Config, rules []config.Rule, opts Options, logger *cblog.Logger) (*Service, error) {
+	rnd, err := renderer.New(cfg.Scenario)
+	if err != nil {
+		return nil, fmt.Errorf("error loading scenario: %w", err)
+	}
 	modelCfg := llm.Config{
 		Provider:      opts.LLMProvider,
 		Model:         opts.LLMModel,
@@ -178,22 +185,37 @@ func createService(ctx context.Context, cfg *config.Config, rules []config.Rule,
 		LLMConfig:     modelCfg,
 		Logger:        logger,
 		Model:         model,
+		Renderer:      rnd,
 	}, nil
 }
 
 // GenerateHTTPResponse creates an HTTP response using the LLM.
 func (s *Service) GenerateHTTPResponse(r *http.Request, port string) ([]byte, error) {
-	messages, err := llm.CreateMessageContent(r, s.Config, s.LLMConfig.Provider)
-	if err != nil {
-		s.Logger.WithPrefix("GALAH").Errorf("error creating llm message: %s", err)
-		return nil, err
+	var respStr string
+	var err error
+	if s.Renderer != nil {
+		if route := s.Renderer.Match(r.URL.Path); route != nil {
+			respStr, err = s.generateTemplateResponse(r, route)
+			if err != nil {
+				s.Logger.WithPrefix("GALAH").Errorf("error generating template response: %s", err)
+				s.EventLogger.LogError(r, respStr, port, err)
+				return nil, err
+			}
+		}
 	}
+	if respStr == "" {
+		messages, err := llm.CreateMessageContent(r, s.Config, s.LLMConfig.Provider)
+		if err != nil {
+			s.Logger.WithPrefix("GALAH").Errorf("error creating llm message: %s", err)
+			return nil, err
+		}
 
-	respStr, err := llm.GenerateLLMResponse(r.Context(), s.Model, s.LLMConfig.Temperature, messages)
-	if err != nil {
-		s.Logger.WithPrefix("GALAH").Errorf("error generating response: %s", err)
-		s.EventLogger.LogError(r, respStr, port, err)
-		return nil, err
+		respStr, err = llm.GenerateLLMResponse(r.Context(), s.Model, s.LLMConfig.Temperature, messages)
+		if err != nil {
+			s.Logger.WithPrefix("GALAH").Errorf("error generating response: %s", err)
+			s.EventLogger.LogError(r, respStr, port, err)
+			return nil, err
+		}
 	}
 	resp := []byte(respStr)
 
@@ -243,4 +265,21 @@ func (s *Service) Close() error {
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+func (s *Service) generateTemplateResponse(r *http.Request, route *config.RouteConfig) (string, error) {
+	messages, err := llm.CreateTemplateMessageContent(r, s.Config.Scenario.Name, route.Fields, s.LLMConfig.Provider)
+	if err != nil {
+		return "", err
+	}
+	data, err := llm.GenerateTemplateData(r.Context(), s.Model, s.LLMConfig.Temperature, messages, route.Fields)
+	if err != nil {
+		return "", err
+	}
+	body, err := s.Renderer.Render(route.Template, data)
+	if err != nil {
+		return "", err
+	}
+	response, err := json.Marshal(llm.JSONResponse{Headers: map[string]string{"Content-Type": "text/html; charset=UTF-8"}, Body: body})
+	return string(response), err
 }

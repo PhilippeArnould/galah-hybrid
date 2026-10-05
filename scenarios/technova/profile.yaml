@@ -1,0 +1,7 @@
+organization:
+  id: technova
+  name: TechNova Solutions
+  type: fictional IT company
+  language: en
+  description: Internal portal for IT support, projects and knowledge sharing.
+canonical_urls: [/, /it-support, /projects, /kb, /about]

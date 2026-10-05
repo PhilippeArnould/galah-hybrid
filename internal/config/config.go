@@ -12,6 +12,7 @@ type Config struct {
 	UserPrompt   string               `yaml:"user_prompt"`
 	Ports        []PortConfig         `yaml:"ports"`
 	Profiles     map[string]TLSConfig `yaml:"profiles"`
+	Scenario     ScenarioConfig       `yaml:"scenario"`
 }
 
 // TLSConfig contains TLS-related settings.
@@ -40,4 +41,18 @@ func LoadConfig(file string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// ScenarioConfig selects an optional set of HTML templates. Routes are ordered.
+type ScenarioConfig struct {
+	Enabled      bool          `yaml:"enabled"`
+	Name         string        `yaml:"name"`
+	TemplatesDir string        `yaml:"templates_dir"`
+	Routes       []RouteConfig `yaml:"routes"`
+}
+
+type RouteConfig struct {
+	Pattern  string   `yaml:"pattern"`
+	Template string   `yaml:"template"`
+	Fields   []string `yaml:"fields"`
 }

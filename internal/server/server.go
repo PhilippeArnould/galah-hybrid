@@ -130,7 +130,7 @@ func (s *Server) SetupServer(pc config.PortConfig) *http.Server {
 			s.handleRequest(w, r, serverAddr, s.Rules)
 		}),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 120 * time.Second,
 	}
 }
 
